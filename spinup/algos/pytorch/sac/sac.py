@@ -11,7 +11,7 @@ import time
 import spinup.algos.pytorch.sac.core as core
 from spinup.utils.logx import EpochLogger
 
-
+# [Data Flow 2] Storage
 class ReplayBuffer:
     """
     A simple FIFO experience replay buffer for SAC agents.
@@ -33,7 +33,7 @@ class ReplayBuffer:
         self.done_buf[self.ptr] = done
         self.ptr = (self.ptr+1) % self.max_size
         self.size = min(self.size+1, self.max_size)
-
+    # [Data Flow 3] Sampling
     def sample_batch(self, batch_size=32):
         idxs = np.random.randint(0, self.size, size=batch_size)
         batch = dict(obs=self.obs_buf[idxs],
@@ -179,6 +179,7 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     logger.log('\nNumber of parameters: \t pi: %d, \t q1: %d, \t q2: %d\n'%var_counts)
 
     # Set up function for computing SAC Q-losses
+    # [Data Flow 4] Consumption
     def compute_loss_q(data):
         o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
 
@@ -202,7 +203,7 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             q1_pi_targ = ac_targ.q1(o2, a2)
             q2_pi_targ = ac_targ.q2(o2, a2)
             q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ)
-            backup = r + gamma * (1 - d) * (q_pi_targ - alpha * logp_a2)
+            backup = r + gamma * (1 - d) * (q_pi_targ - alpha * logp_a2) # Entropy maximization
             # backup: Critic's target. The agent's total objective is a weighted sum of two goals: Maximize Future Rewards (Exploitation). 
             # Also agent gets a small "bonus" for being unpredictable. Alpha is a hyperparameter that controls the importance of exploration.
             # By subtracting alpha * logp_a2, we are effectively adding a reward for entropy.
@@ -333,6 +334,7 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             # unbiased dataset to learn from, leading to more stable and effective training.
 
         # Step the env
+        # [Data Flow 1] Generation: Environment interaction
         step_result = env.step(a)
         # Handle both old gym (4 values) and new gymnasium (5 values)
         if len(step_result) == 5:

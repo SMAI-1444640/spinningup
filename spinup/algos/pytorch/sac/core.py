@@ -51,6 +51,7 @@ class SquashedGaussianMLPActor(nn.Module):
             # this indicates that the policy is stochastic in SAC
             # This is the definition of a stochastic policy: for the same observation, 
             # running the policy multiple times will produce different actions, drawn from the learned probability distribution
+            # [Reparameterization trick]
             pi_action = pi_distribution.rsample()
 
         if with_logprob:
@@ -59,6 +60,7 @@ class SquashedGaussianMLPActor(nn.Module):
             # of where it comes from, check out the original SAC paper (arXiv 1801.01290) 
             # and look in appendix C. This is a more numerically-stable equivalent to Eq 21.
             # Try deriving it yourself as a (very difficult) exercise. :)
+            # [Tanh squashing correction]
             logp_pi = pi_distribution.log_prob(pi_action).sum(axis=-1)
             logp_pi -= (2*(np.log(2) - pi_action - F.softplus(-2*pi_action))).sum(axis=1)
         else:
