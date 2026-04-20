@@ -1,6 +1,9 @@
 import numpy as np
 import tensorflow as tf
-import gym
+try:
+    import gymnasium as gym
+except ImportError:
+    import gym
 import time
 from spinup.algos.tf1.td3 import core
 from spinup.algos.tf1.td3.core import get_vars
@@ -223,31 +226,45 @@ def td3(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     def test_agent():
         for j in range(num_test_episodes):
-            o, d, ep_ret, ep_len = test_env.reset(), False, 0, 0
+            reset_result = test_env.reset()
+            o = reset_result[0] if isinstance(reset_result, tuple) else reset_result
+            d, ep_ret, ep_len = False, 0, 0
             while not(d or (ep_len == max_ep_len)):
                 # Take deterministic actions at test time (noise_scale=0)
-                o, r, d, _ = test_env.step(get_action(o, 0))
+                step_result = test_env.step(get_action(o, 0))
+                if len(step_result) == 5:
+                    o, r, terminated, truncated, _ = step_result
+                    d = terminated or truncated
+                else:
+                    o, r, d, _ = step_result
                 ep_ret += r
                 ep_len += 1
             logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
 
     start_time = time.time()
-    o, ep_ret, ep_len = env.reset(), 0, 0
+    reset_result = env.reset()
+    o = reset_result[0] if isinstance(reset_result, tuple) else reset_result
+    ep_ret, ep_len = 0, 0
     total_steps = steps_per_epoch * epochs
 
     # Main loop: collect experience in env and update/log each epoch
     for t in range(total_steps):
 
         # Until start_steps have elapsed, randomly sample actions
-        # from a uniform distribution for better exploration. Afterwards, 
-        # use the learned policy (with some noise, via act_noise). 
+        # from a uniform distribution for better exploration. Afterwards,
+        # use the learned policy (with some noise, via act_noise).
         if t > start_steps:
             a = get_action(o, act_noise)
         else:
             a = env.action_space.sample()
 
         # Step the env
-        o2, r, d, _ = env.step(a)
+        step_result = env.step(a)
+        if len(step_result) == 5:
+            o2, r, terminated, truncated, _ = step_result
+            d = terminated or truncated
+        else:
+            o2, r, d, _ = step_result
         ep_ret += r
         ep_len += 1
 
@@ -259,14 +276,16 @@ def td3(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         # Store experience to replay buffer
         replay_buffer.store(o, a, r, o2, d)
 
-        # Super critical, easy to overlook step: make sure to update 
+        # Super critical, easy to overlook step: make sure to update
         # most recent observation!
         o = o2
 
         # End of trajectory handling
         if d or (ep_len == max_ep_len):
             logger.store(EpRet=ep_ret, EpLen=ep_len)
-            o, ep_ret, ep_len = env.reset(), 0, 0
+            reset_result = env.reset()
+            o = reset_result[0] if isinstance(reset_result, tuple) else reset_result
+            ep_ret, ep_len = 0, 0
 
         # Update handling
         if t >= update_after and t % update_every == 0:

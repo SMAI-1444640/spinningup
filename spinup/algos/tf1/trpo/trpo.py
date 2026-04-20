@@ -1,6 +1,9 @@
 import numpy as np
 import tensorflow as tf
-import gym
+try:
+    import gymnasium as gym
+except ImportError:
+    import gym
 import time
 import spinup.algos.tf1.trpo.core as core
 from spinup.utils.logx import EpochLogger
@@ -324,7 +327,9 @@ def trpo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                      DeltaLossV=(v_l_new - v_l_old))
 
     start_time = time.time()
-    o, ep_ret, ep_len = env.reset(), 0, 0
+    reset_result = env.reset()
+    o = reset_result[0] if isinstance(reset_result, tuple) else reset_result
+    ep_ret, ep_len = 0, 0
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
@@ -332,7 +337,12 @@ def trpo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             agent_outs = sess.run(get_action_ops, feed_dict={x_ph: o.reshape(1,-1)})
             a, v_t, logp_t, info_t = agent_outs[0][0], agent_outs[1], agent_outs[2], agent_outs[3:]
 
-            o2, r, d, _ = env.step(a)
+            step_result = env.step(a)
+            if len(step_result) == 5:
+                o2, r, terminated, truncated, _ = step_result
+                d = terminated or truncated
+            else:
+                o2, r, d, _ = step_result
             ep_ret += r
             ep_len += 1
 
@@ -353,7 +363,9 @@ def trpo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                 if terminal:
                     # only save EpRet / EpLen if trajectory finished
                     logger.store(EpRet=ep_ret, EpLen=ep_len)
-                o, ep_ret, ep_len = env.reset(), 0, 0
+                reset_result = env.reset()
+                o = reset_result[0] if isinstance(reset_result, tuple) else reset_result
+                ep_ret, ep_len = 0, 0
 
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs-1):
