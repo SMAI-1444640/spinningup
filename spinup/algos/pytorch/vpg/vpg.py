@@ -1,7 +1,10 @@
 import numpy as np
 import torch
 from torch.optim import Adam
-import gym
+try:
+    import gymnasium as gym
+except ImportError:
+    import gym
 import time
 import spinup.algos.pytorch.vpg.core as core
 from spinup.utils.logx import EpochLogger
@@ -235,6 +238,7 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
     logger.setup_pytorch_saver(ac)
 
     def update():
+        # calculates and normalizes the advantage values
         data = buf.get()
 
         # Get loss and info values before update
@@ -247,6 +251,9 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
         loss_pi, pi_info = compute_loss_pi(data)
         loss_pi.backward()
         mpi_avg_grads(ac.pi)    # average grads across MPI processes
+        # The goal is to train a single policy using the experience from all workers. 
+        # By averaging the gradients, every process gets the benefit of 
+        # the experience gathered by all other processes.
         pi_optimizer.step()
 
         # Value function learning
@@ -257,8 +264,12 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
             mpi_avg_grads(ac.v)    # average grads across MPI processes
             vf_optimizer.step()
 
-        # Log changes from update
+        # Log changes from update # ent stands for entropy
         kl, ent = pi_info['kl'], pi_info_old['ent']
+        # LossPi / LossV: How wrong the policy and value functions were.
+        # KL: How much the policy changed in the update step.
+        # Entropy: How random the policy was.
+        # DeltaLossPi / DeltaLossV: How much the policy and value functions changed.
         logger.store(LossPi=pi_l_old, LossV=v_l_old,
                      KL=kl, Entropy=ent,
                      DeltaLossPi=(loss_pi.item() - pi_l_old),
@@ -266,19 +277,28 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
 
     # Prepare for interaction with environment
     start_time = time.time()
-    o, ep_ret, ep_len = env.reset(), 0, 0
+    reset_result = env.reset()
+    o = reset_result[0] if isinstance(reset_result, tuple) else reset_result
+    ep_ret, ep_len = 0, 0
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
+        # Phase 1: Data Collection (The step function)
         for t in range(local_steps_per_epoch):
             a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
 
-            next_o, r, d, _ = env.step(a)
+            step_result = env.step(a)
+            if len(step_result) == 5:
+                next_o, r, terminated, truncated, _ = step_result
+                d = terminated or truncated
+            else:
+                next_o, r, d, _ = step_result
             ep_ret += r
             ep_len += 1
 
             # save and log
             buf.store(o, a, r, v, logp)
+            # d. Stores the entire transition (s_t, a_t, r_t, v_t) in a buffer.
             logger.store(VVals=v)
             
             # Update obs (critical!)
@@ -296,11 +316,20 @@ def vpg(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(),  seed=0,
                     _, v, _ = ac.step(torch.as_tensor(o, dtype=torch.float32))
                 else:
                     v = 0
+                # Phase 2: Learning (Advantage Calculation). This phase
+                # only happens after an entire trajectory or epoch is finished.
+                # for each step t in the buffer, it calculates: delta_t = r_t + self.gamma * v_{t+1} - v_t.
+                # This delta is the one-step Advantage estimate.
                 buf.finish_path(v)
                 if terminal:
                     # only save EpRet / EpLen if trajectory finished
+                    # The EpochLogger (logger): This is for the human's analysis. This is high-level, summary data that tells the human researcher if the training is working.
+                    # EpRet: [150.3, 210.5, 188.1, ...] (the total reward from each episode)
+                    # EpLen: [1000, 875, 1000, ...] (the length of each episode)
                     logger.store(EpRet=ep_ret, EpLen=ep_len)
-                o, ep_ret, ep_len = env.reset(), 0, 0
+                reset_result = env.reset()
+                o = reset_result[0] if isinstance(reset_result, tuple) else reset_result
+                ep_ret, ep_len = 0, 0
 
 
         # Save model

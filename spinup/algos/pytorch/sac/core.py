@@ -48,6 +48,9 @@ class SquashedGaussianMLPActor(nn.Module):
             # Only used for evaluating policy at test time.
             pi_action = mu
         else:
+            # this indicates that the policy is stochastic in SAC
+            # This is the definition of a stochastic policy: for the same observation, 
+            # running the policy multiple times will produce different actions, drawn from the learned probability distribution
             pi_action = pi_distribution.rsample()
 
         if with_logprob:
@@ -88,7 +91,9 @@ class MLPActorCritic(nn.Module):
         act_limit = action_space.high[0]
 
         # build policy and value functions
-        self.pi = SquashedGaussianMLPActor(obs_dim, act_dim, hidden_sizes, activation, act_limit)
+        # The core idea is to use one Q-function to select the best next action and 
+        # the other Q-function to evaluate the value of that action. This decouples the selection from the evaluation.
+        self.pi = SquashedGaussianMLPActor(obs_dim, act_dim, hidden_sizes, activation, act_limit)   # the forward method
         self.q1 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
         self.q2 = MLPQFunction(obs_dim, act_dim, hidden_sizes, activation)
 

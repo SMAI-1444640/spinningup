@@ -1,6 +1,9 @@
 import numpy as np
 import scipy.signal
-from gym.spaces import Box, Discrete
+try:
+    from gymnasium.spaces import Box, Discrete
+except ImportError:
+    from gym.spaces import Box, Discrete
 
 import torch
 import torch.nn as nn
@@ -124,9 +127,17 @@ class MLPActorCritic(nn.Module):
         self.v  = MLPCritic(obs_dim, hidden_sizes, activation)
 
     def step(self, obs):
+        # torch.no_grad() tells PyTorch:
+        # “Do not build a computation graph. Don’t track operations for backprop.”
         with torch.no_grad():
             pi = self.pi._distribution(obs)
+            # The randomness is part of: exploration, correct gradient estimation (policy gradient theorem assumes sampling)
+            # (At test time, many people use the mean action for deterministic evaluation, but training uses sampling.)
             a = pi.sample()
+            # “Given a probability distribution pi, compute the log‑probability of the sampled action a under that distribution.”
+            # pi is a distribution object returned by the policy
+            # self.pi is The neural network that produces that distribution
+            # π is a probability distribution; logp_a is just asking, ‘how likely was the action I took under that distribution?’
             logp_a = self.pi._log_prob_from_distribution(pi, a)
             v = self.v(obs)
         return a.numpy(), v.numpy(), logp_a.numpy()

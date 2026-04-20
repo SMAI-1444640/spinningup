@@ -3,7 +3,10 @@ import itertools
 import numpy as np
 import torch
 from torch.optim import Adam
-import gym
+try:
+    import gymnasium as gym
+except ImportError:
+    import gym
 import time
 import spinup.algos.pytorch.sac.core as core
 from spinup.utils.logx import EpochLogger
@@ -183,15 +186,26 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         q2 = ac.q2(o,a)
 
         # Bellman backup for Q functions
+        # There is no single "final true Q-function" during training. The goal isn't to have them converge to the exact same function, but to use their different perspectives to get a more stable estimate.
         with torch.no_grad():
             # Target actions come from *current* policy
             a2, logp_a2 = ac.pi(o2)
 
             # Target Q-values
+            # Clipped Double Q-Learning, which was introduced to combat overestimation bias in Q-learning algorithms.
+            # The code gets the target Q-value from both q1 and q2 and then uses 
+            # torch.min to select the smaller of the two.
+            # By taking the minimum of the two Q-estimates, the algorithm creates a more pessimistic, or conservative, 
+            # target value. If one Q-function has an erroneously high estimate, the other one (which was trained on different 
+            # batches of data and has different random initial weights) is likely to have a more reasonable estimate. Taking the 
+            # minimum helps to counteract the tendency to chase overestimated values.
             q1_pi_targ = ac_targ.q1(o2, a2)
             q2_pi_targ = ac_targ.q2(o2, a2)
             q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ)
             backup = r + gamma * (1 - d) * (q_pi_targ - alpha * logp_a2)
+            # backup: Critic's target. The agent's total objective is a weighted sum of two goals: Maximize Future Rewards (Exploitation). 
+            # Also agent gets a small "bonus" for being unpredictable. Alpha is a hyperparameter that controls the importance of exploration.
+            # By subtracting alpha * logp_a2, we are effectively adding a reward for entropy.
 
         # MSE loss against Bellman backup
         loss_q1 = ((q1 - backup)**2).mean()
@@ -269,10 +283,19 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     def test_agent():
         for j in range(num_test_episodes):
-            o, d, ep_ret, ep_len = test_env.reset(), False, 0, 0
+            reset_result = test_env.reset()
+            # Handle both old gym (returns obs) and new gymnasium (returns obs, info)
+            o = reset_result[0] if isinstance(reset_result, tuple) else reset_result
+            d, ep_ret, ep_len = False, 0, 0
             while not(d or (ep_len == max_ep_len)):
-                # Take deterministic actions at test time 
-                o, r, d, _ = test_env.step(get_action(o, True))
+                # Take deterministic actions at test time
+                step_result = test_env.step(get_action(o, True))
+                # Handle both old gym (4 values) and new gymnasium (5 values)
+                if len(step_result) == 5:
+                    o, r, terminated, truncated, _ = step_result
+                    d = terminated or truncated
+                else:
+                    o, r, d, _ = step_result
                 ep_ret += r
                 ep_len += 1
             logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
@@ -280,7 +303,10 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Prepare for interaction with environment
     total_steps = steps_per_epoch * epochs
     start_time = time.time()
-    o, ep_ret, ep_len = env.reset(), 0, 0
+    reset_result = env.reset()
+    # Handle both old gym (returns obs) and new gymnasium (returns obs, info)
+    o = reset_result[0] if isinstance(reset_result, tuple) else reset_result
+    ep_ret, ep_len = 0, 0
 
     # Main loop: collect experience in env and update/log each epoch
     for t in range(total_steps):
@@ -288,13 +314,32 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Until start_steps have elapsed, randomly sample actions
         # from a uniform distribution for better exploration. Afterwards, 
         # use the learned policy. 
+        # start_steps:It specifies how many initial steps should be purely for exploration.
+        # After the initial start_steps have passed, the agent switches to using its learned policy.
+        # uses the actor-critic network (ac) to choose what it currently believes is 
+        # the best action for the given observation o. This is the exploitation phase, where the agent leverages its learning.
         if t > start_steps:
             a = get_action(o)
         else:
+            # this samples uniformly from the environment's 
+            # valid action space. This is the exploration phase.
             a = env.action_space.sample()
+            # IMPROTANT in SAC: Seeding the Replay Buffer: At the beginning of training, the policy network is randomly initialized 
+            # and produces nonsensical actions. Following this "bad" policy would lead to a very narrow and poor-quality set of initial experiences. 
+            # By taking random actions, the agent explores a much wider range of the environment's states and actions, populating the replay buffer with diverse and useful data.
+            # Avoiding Early Convergence to Bad Policies: If the agent started learning immediately from its own (initially terrible) actions, 
+            # it could quickly get stuck in a suboptimal behavior pattern. 
+            # The initial random data collection ensures that when the agent does start learning (after start_steps), it has a more representative and 
+            # unbiased dataset to learn from, leading to more stable and effective training.
 
         # Step the env
-        o2, r, d, _ = env.step(a)
+        step_result = env.step(a)
+        # Handle both old gym (4 values) and new gymnasium (5 values)
+        if len(step_result) == 5:
+            o2, r, terminated, truncated, _ = step_result
+            d = terminated or truncated
+        else:
+            o2, r, d, _ = step_result
         ep_ret += r
         ep_len += 1
 
@@ -306,20 +351,37 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Store experience to replay buffer
         replay_buffer.store(o, a, r, o2, d)
 
-        # Super critical, easy to overlook step: make sure to update 
+        # Super critical, easy to overlook step: make sure to update
         # most recent observation!
         o = o2
 
         # End of trajectory handling
         if d or (ep_len == max_ep_len):
             logger.store(EpRet=ep_ret, EpLen=ep_len)
-            o, ep_ret, ep_len = env.reset(), 0, 0
+            reset_result = env.reset()
+            o = reset_result[0] if isinstance(reset_result, tuple) else reset_result
+            ep_ret, ep_len = 0, 0
 
         # Update handling
+        # The agent first collects update_after number of experiences in its replay buffer. 
+        # This ensures that when learning starts, the buffer contains a sufficiently diverse 
+        # set of data to draw from, preventing the agent from overfitting to a small, 
+        # potentially correlated set of early experiences.
+        # This controls the frequency of the updates. The updates don't happen at every single 
+        # time step t. Instead, they are triggered periodically, every update_every steps. 
         if t >= update_after and t % update_every == 0:
             for j in range(update_every):
+                # This is a key detail. When the update condition is met, the code doesn't just perform one update. 
+                # It loops update_every times. This means that for every update_every steps of environment interaction, the agent performs update_every gradient descent steps. This 1:1 ratio of environment steps to gradient steps is a common setup in SAC and other sample-efficient, off-policy algorithms.
                 batch = replay_buffer.sample_batch(batch_size)
+                # Inside the loop, a minibatch of experience is randomly sampled from the replay_buffer. This batch 
+                # contains a collection of past transitions, including the state, the action taken, the reward received, the resulting next state, and whether the episode ended.
                 update(data=batch)
+                # Calculates the loss for the Q-networks (the critic).
+                # Performs a gradient descent step to update the Q-networks.
+                # Calculates the loss for the policy network (the actor).
+                # Performs a gradient descent step to update the policy network.
+                # Updates the target networks using Polyak averaging.
 
         # End of epoch handling
         if (t+1) % steps_per_epoch == 0:

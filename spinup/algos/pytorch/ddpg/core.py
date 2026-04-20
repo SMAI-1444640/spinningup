@@ -31,16 +31,19 @@ class MLPActor(nn.Module):
     def forward(self, obs):
         # Return output from network scaled to action space limits.
         return self.act_limit * self.pi(obs)
-
+# MLPQFunction implements the critic Q(s,a) as a standard multilayer perceptron 
+# whose input is the concatenated observation-action pair.
 class MLPQFunction(nn.Module):
 
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
         super().__init__()
         self.q = mlp([obs_dim + act_dim] + list(hidden_sizes) + [1], activation)
+        # This tensor is fed through the MLP defined by mlp([obs_dim + act_dim] + hidden_sizes + [1], activation), 
+        # producing a scalar output per sample—the predicted Q-value.
 
     def forward(self, obs, act):
         q = self.q(torch.cat([obs, act], dim=-1))
-        return torch.squeeze(q, -1) # Critical to ensure q has right shape.
+        return torch.squeeze(q, -1) # Critical to ensure q has right shape, output shape is [batch_size] instead of [batch_size, 1].
 
 class MLPActorCritic(nn.Module):
 

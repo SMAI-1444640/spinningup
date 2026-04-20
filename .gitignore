@@ -8,3 +8,28 @@ data/
 .vscode/
 .DS_Store
 _build/
+
+# Virtual environments
+spinup_env/
+venv/
+.venv/
+env/
+.env/
+
+# Python
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+dist/
+*.so
+*.egg
+MANIFEST
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
+/tmp/

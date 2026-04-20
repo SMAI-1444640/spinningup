@@ -25,8 +25,15 @@ class MLPActor(nn.Module):
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation, act_limit):
         super().__init__()
         pi_sizes = [obs_dim] + list(hidden_sizes) + [act_dim]
+        # The network self.pi directly outputs a single value (or a vector of values for multi-dimensional action spaces).
+        # This value is passed through a tanh activation function to squash it between -1 and 1.
         self.pi = mlp(pi_sizes, activation, nn.Tanh)
         self.act_limit = act_limit
+        # There is no probability distribution and no sampling. 
+        # For the same observation, the network will always produce 
+        # the exact same action. This is a deterministic policy. 
+        # The exploration in TD3 is handled not by the policy itself, 
+        # but by adding noise to the action after it has been chosen.
 
     def forward(self, obs):
         # Return output from network scaled to action space limits.
